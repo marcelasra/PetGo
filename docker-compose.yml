@@ -1,0 +1,44 @@
+version: "3.8"
+
+services:
+  db:
+    image: postgis/postgis:15-3.3
+    container_name: petgo-db-1
+    restart: always
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: petgo
+      POSTGRES_PASSWORD: petgo
+      POSTGRES_DB: petgo
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U petgo -d petgo"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio
+    container_name: petgo-minio-1
+    command: server /data --console-address ":9090"
+    restart: always
+    environment:
+      MINIO_ROOT_USER: admin
+      MINIO_ROOT_PASSWORD: admin123
+    ports:
+      - "9000:9000"
+      - "9090:9090"
+    volumes:
+      - ./minio-data:/data
+
+  backend:
+    build: ./petgo-backend
+    container_name: petgo-backend
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    volumes:
+      - ./petgo-backend:/code
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
