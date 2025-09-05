@@ -1,11 +1,12 @@
-"""init from models (PetGo) — users, ngos, reports, photos, moderation, trust, geofence"""
+"""init PetGo — users, ngos, reports, photos, moderation, trust, geofence"""
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import ENUM as PGEnum
 from geoalchemy2.types import Geography, Geometry
 
-# Alembic identifiers
-revision = "d1f7a41495ee"
+# Alembic ids
+revision = "0001_init_petgo"
 down_revision = None
 branch_labels = None
 depends_on = None
@@ -15,61 +16,31 @@ def upgrade():
     # 0) PostGIS
     op.execute("CREATE EXTENSION IF NOT EXISTS postgis;")
 
-    # 1) ENUMs idempotentes (garante que existem e evita DuplicateObject)
+    # 1) (Re)criar ENUMs de forma determinística
     op.execute("""
     DO $$
     BEGIN
-      IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'reportstatus') THEN
-        CREATE TYPE reportstatus AS ENUM ('REPORTADO','EM_ATENDIMENTO','RESOLVIDO','UNDER_REVIEW','REJECTED','PUBLISHED');
-      END IF;
+      IF EXISTS (SELECT 1 FROM pg_type WHERE typname = 'role') THEN DROP TYPE role; END IF;
+      IF EXISTS (SELECT 1 FROM pg_type WHERE typname = 'visibility') THEN DROP TYPE visibility; END IF;
+      IF EXISTS (SELECT 1 FROM pg_type WHERE typname = 'reportstatus') THEN DROP TYPE reportstatus; END IF;
+      IF EXISTS (SELECT 1 FROM pg_type WHERE typname = 'moderationdecision') THEN DROP TYPE moderationdecision; END IF;
+      IF EXISTS (SELECT 1 FROM pg_type WHERE typname = 'contentflagstatus') THEN DROP TYPE contentflagstatus; END IF;
     END$$;
     """)
-    op.execute("""
-    DO $$
-    BEGIN
-      IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'visibility') THEN
-        CREATE TYPE visibility AS ENUM ('PUBLIC','FOGGED','ONG_ONLY');
-      END IF;
-    END$$;
-    """)
-    op.execute("""
-    DO $$
-    BEGIN
-      IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'role') THEN
-        CREATE TYPE role AS ENUM ('USER','ONG','ADMIN');
-      END IF;
-    END$$;
-    """)
-    op.execute("""
-    DO $$
-    BEGIN
-      IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'moderationdecision') THEN
-        CREATE TYPE moderationdecision AS ENUM ('APPROVED','REJECTED','MANUAL_REVIEW');
-      END IF;
-    END$$;
-    """)
-    op.execute("""
-    DO $$
-    BEGIN
-      IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'contentflagstatus') THEN
-        CREATE TYPE contentflagstatus AS ENUM ('OPEN','UNDER_REVIEW','CLOSED');
-      END IF;
-    END$$;
-    """)
+    op.execute("CREATE TYPE role AS ENUM ('USER','ONG','ADMIN');")
+    op.execute("CREATE TYPE visibility AS ENUM ('PUBLIC','FOGGED','ONG_ONLY');")
+    op.execute("CREATE TYPE reportstatus AS ENUM ('REPORTADO','EM_ATENDIMENTO','RESOLVIDO','UNDER_REVIEW','REJECTED','PUBLISHED');")
+    op.execute("CREATE TYPE moderationdecision AS ENUM ('APPROVED','REJECTED','MANUAL_REVIEW');")
+    op.execute("CREATE TYPE contentflagstatus AS ENUM ('OPEN','UNDER_REVIEW','CLOSED');")
 
-    # 2) Tabelas base (usando os ENUMs existentes, sem recriar)
+    # 2) Tabelas (referenciando os ENUMs criados; NÃO recriar tipos)
     op.create_table(
         "users",
         sa.Column("id", sa.BigInteger(), primary_key=True, autoincrement=True),
         sa.Column("name", sa.String(120), nullable=False),
         sa.Column("email", sa.String(120), nullable=False, unique=True),
         sa.Column("password_hash", sa.String(255), nullable=False),
-        sa.Column(
-            "role",
-            sa.Enum("USER", "ONG", "ADMIN", name="role", create_type=False),
-            nullable=False,
-            server_default="USER",
-        ),
+        sa.Column("role", PGEnum("USER","ONG","ADMIN", name="role", create_type=False), nullable=False, server_default="USER"),
         sa.Column("created_at", sa.DateTime(), nullable=False, server_default=sa.text("NOW()")),
     )
 
@@ -89,22 +60,10 @@ def upgrade():
         sa.Column("id", sa.BigInteger(), primary_key=True, autoincrement=True),
         sa.Column("user_id", sa.BigInteger(), sa.ForeignKey("users.id", ondelete="RESTRICT"), nullable=False),
 
-        sa.Column(
-            "status",
-            sa.Enum(
-                "REPORTADO", "EM_ATENDIMENTO", "RESOLVIDO", "UNDER_REVIEW", "REJECTED", "PUBLISHED",
-                name="reportstatus",
-                create_type=False,
-            ),
-            nullable=False,
-            server_default="UNDER_REVIEW",
-        ),
-        sa.Column(
-            "visibility_level",
-            sa.Enum("PUBLIC", "FOGGED", "ONG_ONLY", name="visibility", create_type=False),
-            nullable=False,
-            server_default="PUBLIC",
-        ),
+        sa.Column("status", PGEnum("REPORTADO","EM_ATENDIMENTO","RESOLVIDO","UNDER_REVIEW","REJECTED","PUBLISHED",
+                                   name="reportstatus", create_type=False), nullable=False, server_default="UNDER_REVIEW"),
+        sa.Column("visibility_level", PGEnum("PUBLIC","FOGGED","ONG_ONLY", name="visibility", create_type=False),
+                                   nullable=False, server_default="PUBLIC"),
 
         sa.Column("geom", Geography(geometry_type="POINT", srid=4326), nullable=False),
         sa.Column("approx_geom", Geometry(geometry_type="POINT", srid=4326), nullable=True),
@@ -131,11 +90,7 @@ def upgrade():
         sa.Column("report_id", sa.BigInteger(), sa.ForeignKey("reports.id", ondelete="CASCADE"), nullable=False),
         sa.Column("provider", sa.String(40)),
         sa.Column("score", sa.String(40)),
-        sa.Column(
-            "decision",
-            sa.Enum("APPROVED", "REJECTED", "MANUAL_REVIEW", name="moderationdecision", create_type=False),
-            nullable=False,
-        ),
+        sa.Column("decision", PGEnum("APPROVED","REJECTED","MANUAL_REVIEW", name="moderationdecision", create_type=False), nullable=False),
         sa.Column("reviewer_id", sa.BigInteger(), sa.ForeignKey("users.id", ondelete="SET NULL")),
         sa.Column("created_at", sa.DateTime(), nullable=False, server_default=sa.text("NOW()")),
     )
@@ -146,12 +101,7 @@ def upgrade():
         sa.Column("report_id", sa.BigInteger(), sa.ForeignKey("reports.id", ondelete="CASCADE"), nullable=False),
         sa.Column("reporter_id", sa.BigInteger(), sa.ForeignKey("users.id", ondelete="SET NULL")),
         sa.Column("reason", sa.String(120), nullable=False),
-        sa.Column(
-            "status",
-            sa.Enum("OPEN", "UNDER_REVIEW", "CLOSED", name="contentflagstatus", create_type=False),
-            nullable=False,
-            server_default="OPEN",
-        ),
+        sa.Column("status", PGEnum("OPEN","UNDER_REVIEW","CLOSED", name="contentflagstatus", create_type=False), nullable=False, server_default="OPEN"),
         sa.Column("created_at", sa.DateTime(), nullable=False, server_default=sa.text("NOW()")),
     )
 
@@ -218,7 +168,6 @@ def downgrade():
     op.drop_table("ngos")
     op.drop_table("users")
 
-    # Enums
     op.execute("DROP TYPE IF EXISTS contentflagstatus;")
     op.execute("DROP TYPE IF EXISTS moderationdecision;")
     op.execute("DROP TYPE IF EXISTS role;")
